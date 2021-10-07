@@ -84,8 +84,10 @@ def main():
             stats['metrics'].append(
             {'name': 'stats',
              'tags': {'agent_host':socket.getfqdn(), 'agent_node_ip':my_ip,
-             'agent_node_uuid':uuid.NAMESPACE_DNS.urn.split(':')[-1].upper(),'agent_node_os':platform.platform(), 'source':DATA_SOURCE,
-             'base_name':p.name,'absolute':p.absolute().__str__(),'stem':p.stem,'parent':p.parent.__str__(),
+             'agent_node_uuid':uuid.uuid5(uuid.UUID('015f879f-fd3a-4afe-8f31-67b1c1502cef'),socket.getfqdn()).__str__().upper(),
+             'agent_node_os':platform.platform(), 'source':DATA_SOURCE,
+             'base_name':p.name, 'absolute':p.absolute().__str__(),
+             'stem':p.stem, 'parent':p.parent.__str__(),
              'owner':p.owner() if platform.system() != 'Windows' else 'N/A',
              'group':p.group() if platform.system() != 'Windows' else 'N/A',
              'uid': _st.st_uid, 'gid': _st.st_gid,
