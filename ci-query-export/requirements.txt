@@ -1,0 +1,4 @@
+###### Requirements for ci-query-export ######
+requests
+pandas
+XlsxWriter
