@@ -277,7 +277,6 @@ def main():
             resp = api.put(my_annot['self']+'/values',base_path='', json=[payload])
             log.info(f'Payload {n}: Annotations applied: {resp}')
     else:
-        pass
         log.debug(f'Submitting annotations payload: {annots_to}')
         resp = api.put(my_annot['self']+'/values',base_path='', json=[annots_to])
         log.info(f'Annotations applied: {resp}')
