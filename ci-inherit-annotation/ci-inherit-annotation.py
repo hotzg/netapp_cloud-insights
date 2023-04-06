@@ -207,7 +207,7 @@ def main():
         'InternalVolume':['Volume','Qtree','Share','Quota'],
         'Volume':['DataStore','Port'],
         'Qtree':['Share'],
-        'Host':['VirtualMachine'],
+        'Host':['VirtualMachine','Volume'],
         'DataStore':['Host','Vmdk'],
         'Switch':['Port'],
         'VirtualMachine':['Vmdk'] }
@@ -250,21 +250,22 @@ def main():
     annots_from = api.get(my_annot['self']+f'/values/{obj_from}',base_path='')
     annots_to = {"objectType": obj_to,"values": []}
     for annot in annots_from:
-        if annot['rawValue'] not in annots_to['values']:
-            annots_to['values'].append({"rawValue": annot['rawValue'],"targets": []})
         for num,src in enumerate(annot['targets']):
             obj = api.get(src,base_path='')
-            for n,val in enumerate(annots_to['values']):
-                if val['rawValue'] == annot['rawValue']:
-                    targets = api.get(src+f'/{obj_to_asset(obj_to)}',base_path='')
-                    if targets:
+            targets = api.get(src+f'/{obj_to_asset(obj_to)}',base_path='')
+            if targets:
+                if not annots_to['values'] or annot['rawValue'] not in [v['rawValue'] for v in annots_to['values']]:
+                    annots_to['values'].append({"rawValue": annot['rawValue'],"targets": []})
+                for n,val in enumerate(annots_to['values']):
+                    if val['rawValue'] == annot['rawValue']:
                         log.debug('Adding annotation targets for {}: {}'.format(obj['name'],', '.join([obj['name'] for obj in targets])))
                         val['targets'].extend([obj['id'] for obj in targets])
-                    else:
-                        log.warning(f'No {obj_to_asset(obj_to)} found for {obj_from} {obj["name"]}')
+            else:
+                log.warning(f'No {obj_to_asset(obj_to)} found for {obj_from} {obj["name"]}')
+
     for num,val in enumerate(annots_to['values']):
         if not val['targets']:
-            log.info(f"No target {annots_to['objectType']} found for annotation {val['rawValue']}.")
+            log.info(f"No target {annots_to['objectType']} found for annotation {my_annot['name']}, value {val['rawValue']}.")
             log.debug(f"Removing from payload: {annots_to['values'].pop(num)}")
     if not annots_to['values']:
         log.info(f"No annotation values for \"{my_annot['name']}\" found. Nothing to inherit.")
