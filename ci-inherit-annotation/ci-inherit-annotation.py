@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-import os, logging, logging.handlers, requests, math, json, re, argparse, curses
-from curses import panel
-from datetime import datetime as dt, timedelta as td, timezone as tz
+import platform, getpass, logging, logging.handlers, requests, json, argparse
+from InquirerPy import inquirer as inq
+from InquirerPy.base.control import Choice
+from datetime import datetime as dt
 
-# global VARS
-LOGFILE_LOGLEVEL = 'DEBUG'
+# global vars
+LOG_TO_CI = False
+CI_LOGLEVEL = 'INFO'
+CI_LOGTYPE = 'custom_script'
+MAX_PAYLOAD_TARGETS = 2000
 
 # argument parsing
 parser = argparse.ArgumentParser(
@@ -14,11 +18,20 @@ parser = argparse.ArgumentParser(
 myprog = parser.prog.replace('.py','')
 parser.add_argument('-u','--url', action='store', required=True, help='URL to CI Tenant: https://ci_tenat.cloudinsights.netapp.com')
 parser.add_argument('-t','--token', action='store', required=True, help='Token file containing the actual token for the CI Tenant')
-parser.add_argument('-mx','--max-payload-targets', action='store', required=False, type=int, default=5000, help='Split payload and annotate no more than MAX_PAYLOAD_TARGETS at a time to avoid server timeouts')
-parser.add_argument('-ld','--log-dir', action='store', required=False, default=os.path.join(os.path.expanduser("~"),'.'+myprog,'log'), help='Log directory in which to write log files in')
+parser.add_argument('-px','--proxy', action='store', required=False, default=None, help='Proxy for http(s) connections to Tenant: proxy.yourdomain.com:3128')
+parser.add_argument('-pxu','--proxy-user', action='store', required=False, default=None, help='User to authenticate with at proxy.')
+parser.add_argument('-pxp','--proxy-passwd', action='store', required=False, default=None, help='Password to authenticate with at proxy.')
 parser.add_argument('-ll','--loglevel', action='store', required=False, choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],\
                     type=lambda txt: txt.upper(), default='INFO', help='Loglevel for console output')
 args = parser.parse_args()
+
+proxy = requests.utils.get_environ_proxies(args.url)
+if args.proxy:
+    pr = requests.utils.urlparse(args.proxy)
+    if args.proxy_user and args.proxy_passwd:
+        proxy = {'http':f'http://{args.proxy_user}:{args.proxy_passwd}@{pr.netloc}','https':f'http://{args.proxy_user}:{args.proxy_passwd}@{pr.netloc}'}
+    else:
+        proxy = {'http':f'http://{pr.netloc}','https':f'http://{pr.netloc}'}
 
 with open(args.token, 'r') as fp:
     lines = fp.readlines()
@@ -27,138 +40,69 @@ for line in lines:
      if not line.startswith('#') and len(line) > 472:
          token = line.rstrip('\n') if line.endswith('\n') else line
 
-class Menu(object):
-    def __init__(self, stdscreen, items, title = None, back_button = False):
-        self.window = stdscreen.subwin(0, 0)
-        self.window.keypad(1)
-        self.panel = panel.new_panel(self.window)
-        self.panel.hide()
-        panel.update_panels()
-        self.margin_top = 0
-        self.offset = 0
-        self.position = 1
-        self.title = title
-        self.items = items
-        self.back_button = back_button
-        if len(self.items) >= curses.LINES:
-            self.max_items = math.ceil(len(self.items)/math.ceil(len(self.items)/curses.LINES))-2
-        else:
-            self.max_items = len(self.items)
-        self.select = None
-    def navigate(self, n):
-        if n > 0: # navigating down
-            if self.position +n <= self.max_items + self.offset: # scroll with cursor only
-                self.position += n
-            elif self.position +n >= len(self.items): # stop scrolling at end of list
-                if self.back_button:
-                    self.position = len(self.items) +2
-                    self.offset = self.position - self.max_items -2
-                else:
-                    self.position = len(self.items)
-                    self.offset = self.position - self.max_items
-            else: # scroll with cursor and items
-                self.position += n
-                self.offset = self.position - self.max_items
-        else: #navigating up
-            if self.position + n <= 0:
-                self.position = 1
-                self.offset = 0
-            elif self.back_button and self.position == len(self.items) +2:
-                self.position += n-1
-            elif self.offset > 0:
-                if self.position + n > self.offset:
-                    self.position += n
-                else:
-                    self.position += n
-                    self.offset += n
-            else:
-                self.position += n
-    def display(self):
-        self.panel.top()
-        self.panel.show()
-        self.window.clear()
-        max_item_len = max(max([len(itm) for itm in self.items])+4,len(self.title)+4)
-        if self.title:
-            self.margin_top = 1
-            curses.init_pair(1, curses.COLOR_WHITE, curses.COLOR_BLUE)
-            self.window.addstr(0, 1, "{}".format(self.title.center(max_item_len+4)), curses.A_REVERSE)
-        while True:
-            self.window.refresh()
-            curses.doupdate()
-            for index, item in enumerate(self.items[self.offset:self.max_items+self.offset], self.offset+1):
-                if index == self.position: mode = curses.A_REVERSE
-                else: mode = curses.A_NORMAL
-                msg = "{:<4}{}".format(index, item.rjust(max_item_len))
-                self.window.addstr(index+self.margin_top-self.offset, 1, msg, mode)
-            if self.back_button:
-                if self.position == len(self.items) + 2: mode = curses.A_REVERSE
-                else: mode = curses.A_NORMAL
-                self.window.addstr(self.margin_top+self.max_items+2, 1, 'Back', mode)
-            key = self.window.getch()
-            if key in [curses.KEY_ENTER, ord("\n")]:
-                if self.position <= len(self.items):
-                    self.select = self.position-1
-                elif self.back_button and self.position == len(self.items)+2:
-                    self.select = -1
-                break
-            elif key == curses.KEY_UP: self.navigate(-1)
-            elif key == curses.KEY_PPAGE: self.navigate(math.ceil(self.max_items*-0.25))
-            elif key == curses.KEY_HOME: self.navigate(self.position*-1)
-            elif key == curses.KEY_DOWN: self.navigate(1)
-            elif key == curses.KEY_NPAGE: self.navigate(math.ceil(self.max_items*0.25))
-            elif key == curses.KEY_END: self.navigate(len(self.items) - self.position)
-            elif key == ord("q"): break
-            elif self.back_button and key == ord("b"): self.select = -1; break
-        self.window.clear()
-        self.panel.hide()
-        panel.update_panels()
-        curses.doupdate()
-
-class SelectFromList(object):
-    def __init__(self, stdscreen, menuitems, title = None, back_button = False):
-        self.screen = stdscreen
-        curses.curs_set(0)
-        curses.use_default_colors()
-        menu_items = [itm for itm in menuitems]
-        main_menu = Menu(self.screen, menu_items, title = title, back_button = back_button)
-        main_menu.display()
-        self.pick = main_menu.select
-
 class ciSession(requests.Session):
-    def __init__(self, token, base_url = None, verify=True, DisableInsecureRequestWarning = False, *args, **kwargs):
+    def __init__(self, token, base_url = None, proxy={}, loglevel='INFO', verify=True, DisableInsecureRequestWarning = False, *args, **kwargs):
         super().__init__(*args, **kwargs)
         if DisableInsecureRequestWarning: requests.packages.urllib3.disable_warnings(requests.packages.urllib3.exceptions.InsecureRequestWarning)
-        self.headers['X-CloudInsights-ApiKey'] = token
         self.verify = verify
         self.base_url = base_url
-        self.sysinfo = requests.get(requests.sessions.urljoin(base_url,'rest/v1/systemInfo')).json()
-    def request(self, method, url, base_path='/rest/v1', strip_token=False, *args, **kwargs):
-        if strip_token: self.headers.pop('X-CloudInsights-ApiKey')
-        url = requests.sessions.urljoin(self.base_url, f'{base_path.strip("/")}/{url.strip("/")}')
+        self.loglevel = loglevel
+        self.proxies.update(proxy)
+        self.sysinfo = self.request('GET','systemInfo')
+        self.headers.update({'Accept-Encoding':'gzip','X-CloudInsights-ApiKey':token})
+    def mount(self,prefix,adapter):
+        adapter.max_retries = requests.packages.urllib3.util.retry.Retry(total=5, backoff_factor=0.5, status_forcelist=[500,502,503,504])
+        super().mount(prefix,adapter)
+    def request(self, method, uri, base_path='/rest/v1', ReturnRawResponse = False, *args, **kwargs):
+        # example: uri = assets/storages
+        if uri.strip("/")[:7] == 'rest/v1': url = requests.sessions.urljoin(self.base_url, f'{uri.strip("/")}')
+        else: url = requests.sessions.urljoin(self.base_url, f'{base_path.strip("/")}/{uri.strip("/")}')
         r = super().request(method, url, *args, **kwargs)
-        if not r.ok: raise Exception(f'apiRequestError: <{r.status_code}>, url: {r.request.url}, {r.text}')
-        return r.json()
+        # print requests on console, not using a logger at loglevel debug
+        if self.loglevel == 'DEBUG':
+            print(method, r.elapsed, r.status_code, requests.utils.unquote(r.request.url))
+        if ReturnRawResponse: return r
+        elif not r.ok: raise Exception(f'apiRequestError: <{r.status_code}> {method} {r.request.url}\n{r.text}')
+        elif not r.text: return {} # some calls return no payload
+        else: return r.json()
 
-# Set up logging with rotating file handler and console handler
-if not os.path.isdir(args.log_dir): os.makedirs(args.log_dir, mode=0o700, exist_ok=True)
-log = logging.getLogger(f'{myprog}') # create logger instance
-requests.urllib3.connectionpool.log = log
-rfh = logging.handlers.RotatingFileHandler('%s' %(os.path.join(args.log_dir,f'{myprog}.log')), maxBytes=26214400, backupCount=10)
-rhf_fmt = logging.Formatter(fmt='%(asctime)s %(name)s %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
-rfh.setLevel(LOGFILE_LOGLEVEL)
-rfh.setFormatter(rhf_fmt)
-log.addHandler(rfh)
-ch = logging.StreamHandler()
-ch.setLevel(args.loglevel)
-ch_fmt = logging.Formatter(fmt="%(name)s: [%(levelname)s]: %(message)s")
-ch.setFormatter(ch_fmt)
-log.addHandler(ch)
-log.setLevel(min(rfh.level,ch.level))
+class CiHttpHandler(logging.Handler):
+    def __init__(self,session,*args,**kwargs):
+        super().__init__(*args, **kwargs)
+        self.session = session
+    def emit(self, record):
+        payload = [self.format(record)]
+        return self.session.post('logs/ingest', json=payload)
 
-log.debug('{} invoked by user {}'.format(myprog, os.getlogin()))
+class CiJsonFormatter(logging.Formatter):
+    def __init__(self, log_type=parser.prog, *args,**kwargs):
+        super().__init__(*args, **kwargs)
+        fields = {"timestamp":dt.now().timestamp(), "type": f"logs.{log_type}", "source": my_ip(), "hostname": platform.node(),
+            "user": getpass.getuser(), "program": myprog, "level":"%(levelname)s", "message": "%(message)s"}
+        self.formatter = logging.Formatter(json.dumps(fields))
+    def format(self, record, *args,**kwargs):
+        formatted = json.loads(self.formatter.format(record))
+        if "extra" in record.__dict__ and isinstance(record.__dict__['extra'], dict):
+            for k,v in record.__dict__['extra'].items():
+                formatted[k] = v
+        return formatted
+
+class cfFormatter(logging.Formatter):
+    def __init__(self, *args,**kwargs):
+        super().__init__(*args, **kwargs)
+    def format(self, record, *args,**kwargs):
+        if "extra" in record.__dict__.keys() and isinstance(record.__dict__['extra'], dict):
+            formatter = logging.Formatter("%(name)s: [%(levelname)s]: %(message)s - %(extra)s")
+        else: formatter = logging.Formatter("%(name)s: [%(levelname)s]: %(message)s")
+        return formatter.format(record)
+
+def my_ip():
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.connect(("10.255.255.255", 1))
+    return s.getsockname()[0]
 
 if not token:
-    log.critical('Reading token from file {} failed. Exiting'.format(args.token))
     raise Exception('MissingToken: Reading token from file {} failed.'.format(args.token))
 
 def obj_to_asset(obj_type):
@@ -167,38 +111,8 @@ def obj_to_asset(obj_type):
 def asset_to_obj(asset):
     return asset[0].upper() + asset[1:-1] if asset != 'switches' else 'Switch'
 
-def split_payload(payload,max_targets):
-    # returns list of payloads dicts
-    payloads = []
-    # total_targets: num of targets passed in
-    total_targets = sum([len(val['targets']) for val in payload['values']])
-    # max_tgts: max targets per list item to return
-    max_tgts = math.ceil(total_targets/math.ceil(total_targets/max_targets))
-    for n,val in enumerate(payload['values']):
-        for i in range(0,len(val['targets']),max_tgts):
-            diff = max_tgts - sum([len(val['targets']) for val in payloads[-1]['values']]) if len(payloads) > 0 else 0
-            my_tgt = val['targets'][i:i+max_tgts]
-            if diff == 0:
-                payloads.append({'objectType': payload['objectType'],'values': [{'rawValue': val['rawValue'], 'targets': my_tgt}]})
-            elif len(my_tgt) <= diff:
-                if val['rawValue'] not in [v['rawValue'] for v in payloads[-1]['values']]:
-                    payloads[-1]['values'].append({'rawValue': val['rawValue'], 'targets': my_tgt})
-                else:
-                    for v in payloads[-1]['values']:
-                        if val['rawValue'] == v['rawValue']:
-                            v['targets'].extend(my_tgt)
-            else:
-                if val['rawValue'] not in [v['rawValue'] for v in payloads[-1]['values']]:
-                    payloads[-1]['values'].append({'rawValue': val['rawValue'], 'targets': my_tgt[:diff]})
-                    payloads.append({'objectType': payload['objectType'],'values': [{'rawValue': val['rawValue'], 'targets': my_tgt[diff:]}]})
-                else:
-                    for v in payloads[-1]['values']:
-                        if val['rawValue'] == v['rawValue']:
-                            v['targets'].extend(my_tgt[:diff])
-                    payloads.append({'objectType': payload['objectType'],'values': [{'rawValue': val['rawValue'], 'targets': my_tgt[diff:]}]})
-    return payloads
-
 def main():
+    log.debug('{} invoked by user {}'.format(myprog, getpass.getuser()))
     obj_tree = {
         'Storage': ['StorageNode','StoragePool','StorageVirtualMachine','InternalVolume','Volume','Qtree','Share','Port','Disk'],
         'StorageNode' :['StoragePool','InternalVolume','Volume','Port'],
@@ -206,84 +120,94 @@ def main():
         'StorageVirtualMachine': ['StoragePool','InternalVolume','Volume','Qtree','Share'],
         'InternalVolume':['Volume','Qtree','Share','Quota'],
         'Volume':['DataStore','Port'],
-        'Qtree':['Share'],
-        'Host':['VirtualMachine','Volume'],
+        'Qtree':['Share','Quota'],
+        'Host':['VirtualMachine','Port','Volume'],
         'DataStore':['Host','Vmdk'],
         'Switch':['Port'],
         'VirtualMachine':['Vmdk'] }
-    annots = sorted(api.get('assets/annotations'),key=lambda annot: annot['name'])
+    annots = api.get('assets/annotations')
     if not annots:
         log.warning('No annotations found on tenant {}, tenantId: {}. Exiting.'.format(requests.utils.urlparse(api.base_url).netloc,api.sysinfo['tenantId']))
         exit(0)
-    annot_names = [annot['name'] for annot in annots]
-    my_annot = obj_from = obj_to = None
+    my_annot = None
+    obj_from = None
+    obj_to = None
     while not obj_to:
         if not my_annot:
-            choice = curses.wrapper(SelectFromList, annot_names, title = "Select annotation")
-            if choice.pick == None:
-                print('No annotation selected. Good bye.' )
-                exit(0)
-            my_annot = annots[choice.pick]
-        inherit_from = sorted([t for t in my_annot['supportedObjectTypes'] if t in obj_tree.keys()])
-        if not obj_from:
-            if inherit_from:
-                choice = curses.wrapper(SelectFromList, inherit_from, title = "Select object type to inherit {} from (source)".format(my_annot['name']), back_button=True)
-                if choice.pick == None:
-                    print('No object type to inherit from (source) selected. Exiting.' )
-                    exit(0)
-                elif choice.pick == -1:
-                    my_annot = None
-                    continue
-                else: obj_from = inherit_from[choice.pick]
+            my_annot = inq.select(
+                message="Select annotation:",
+                choices=[Choice(annot, name=annot['name'],enabled=False) for annot in sorted(annots,key=lambda annot: annot['name'].casefold())],
+                default=None, border=True, qmark='1.', amark=u'\u2713', pointer=u'\u25BA', show_cursor=False, instruction='(or press CTRL-C to abort)'
+            ).execute()
+        if not obj_to:
+            obj_from = inq.select(
+                message='Select object type to inherit annotation "{}" from (source):'.format(my_annot['name']),
+                choices=sorted([t for t in my_annot['supportedObjectTypes'] if t in obj_tree.keys()]), default=None, border=True, qmark='2.', 
+                amark=u'\u2713', pointer=u'\u25BA', show_cursor=False, instruction='(or press CTRL-Z to go back)', mandatory = False
+            ).execute()
+            if obj_from:
+                obj_to = inq.select(
+                    message='Select object type to inherit annotation "{}" to (target):'.format(my_annot['name']),
+                    choices=sorted(obj_tree[obj_from]), default=None, border=True, qmark='3.', amark=u'\u2713',
+                    pointer=u'\u25BA', show_cursor=False, instruction='(or press CTRL-Z to go back)', mandatory = False
+                    ).execute()
             else:
-                print(f"No supported object types found for annotation {my_annot['name']} to inherit from. Exiting.")
-                exit(0)
-        inherit_to = sorted(obj_tree[inherit_from[choice.pick]])
-        choice = curses.wrapper(SelectFromList, inherit_to, title = "Select object type to inherit {} to (target)".format(my_annot['name']), back_button=True)
-        if choice.pick == None:
-            print('No object type to inherit to (target) selected. Exiting.' )
-            exit(0)
-        elif choice.pick == -1: obj_from = None
-        else: obj_to = inherit_to[choice.pick]
+                my_annot = None
 
     log.info(f'Annotation {my_annot["name"]} selected to inherit from {obj_from} to {obj_to}')
-    annots_from = api.get(my_annot['self']+f'/values/{obj_from}',base_path='')
-    annots_to = {"objectType": obj_to,"values": []}
-    for annot in annots_from:
-        for num,src in enumerate(annot['targets']):
-            obj = api.get(src,base_path='')
-            targets = api.get(src+f'/{obj_to_asset(obj_to)}',base_path='')
-            if targets:
-                if not annots_to['values'] or annot['rawValue'] not in [v['rawValue'] for v in annots_to['values']]:
-                    annots_to['values'].append({"rawValue": annot['rawValue'],"targets": []})
-                for n,val in enumerate(annots_to['values']):
-                    if val['rawValue'] == annot['rawValue']:
-                        log.debug('Adding annotation targets for {}: {}'.format(obj['name'],', '.join([obj['name'] for obj in targets])))
-                        val['targets'].extend([obj['id'] for obj in targets])
-            else:
-                log.warning(f'No {obj_to_asset(obj_to)} found for {obj_from} {obj["name"]}')
-
-    for num,val in enumerate(annots_to['values']):
-        if not val['targets']:
-            log.info(f"No target {annots_to['objectType']} found for annotation {my_annot['name']}, value {val['rawValue']}.")
-            log.debug(f"Removing from payload: {annots_to['values'].pop(num)}")
-    if not annots_to['values']:
-        log.info(f"No annotation values for \"{my_annot['name']}\" found. Nothing to inherit.")
+    annots_from = api.get('{}/values/{}'.format(my_annot['self'],obj_from))
+    payloads = []
+    if not annots_from:
+        log.info(f'No {obj_from} with annotation {my_annot["name"]} found.')
         exit()
-    if sum([len(val['targets']) for val in annots_to['values']]) > args.max_payload_targets:
-        payloads = split_payload(annots_to,args.max_payload_targets)
-        log.debug(f'Annotation targets exceed MAX_PAYLOAD_TARGETS = {args.max_payload_targets}. Perfroming staggered payload submit.')
-        for n,payload in enumerate(payloads):
-            log.debug(f'Submitting annotations payload {n}: {payload}')
-            resp = api.put(my_annot['self']+'/values',base_path='', json=[payload])
+    for annot in annots_from:
+        for tgt in annot['targets']:
+            targets = api.get('{}/{}'.format(tgt,obj_to_asset(obj_to)))
+            if targets:
+                if not payloads:
+                    payloads.append({"objectType": obj_to,"values": []})
+                if annot['rawValue'] not in [rv['rawValue'] for rv in payloads[-1]['values']]:
+                    payloads[-1]['values'].append({'rawValue': annot['rawValue'], 'targets': []})
+                # iterate through targets and add to payloads in chunks of MAX_PAYLOAD_TARGETS
+                for target in targets:
+                    for val in payloads[-1]['values']:
+                        if val['rawValue'] == annot['rawValue']:
+                            if sum([len(v['targets']) for v in payloads[-1]['values']]) < MAX_PAYLOAD_TARGETS:
+                                val['targets'].append(target['id'])
+                            else:
+                                # MAX_PAYLOAD_TARGETS reached, add new chunk to payloads
+                                payloads.append({"objectType": obj_to,"values": [{'rawValue': annot['rawValue'], 'targets': [target['id']]}]})
+                                break
+            else:
+                asset = api.get(tgt) # retrieve asset name for log message
+                log.warning(f'No {obj_to_asset(obj_to)} found for {obj_from} {asset["name"]}')
+    if payloads:
+        log.info('Submitting payload of annotation assignments in chunks of up to {} targets'.format(MAX_PAYLOAD_TARGETS))
+        for n,payload in enumerate(payloads,1):
+            tgt_count = sum([len(val['targets']) for val in payload['values']])
+            log.debug(f'Submitting annotations payload {n} with {tgt_count} targets')
+            resp = api.put(my_annot['self']+'/values', json=[payload])
             log.info(f'Payload {n}: Annotations applied: {resp}')
-    else:
-        log.debug(f'Submitting annotations payload: {annots_to}')
-        resp = api.put(my_annot['self']+'/values',base_path='', json=[annots_to])
-        log.info(f'Annotations applied: {resp}')
-    print('All done, have a naice day!')
+    
+    print('All done, have a nice day!')
     exit(0)
 
 if __name__ == '__main__':
-    with ciSession(token = token, base_url = args.url) as api:
+    with ciSession(token = token, proxy=proxy, base_url = args.url, loglevel=args.loglevel) as api:
+        # Set up logging with console handler and custom ci handler
+        log = logging.getLogger(f'{myprog}') # create logger instance
+        ch = logging.StreamHandler()
+        ch.setLevel(args.loglevel)
+        ch_fmt = cfFormatter()
+        ch.setFormatter(ch_fmt)
+        log.addHandler(ch)
+        if LOG_TO_CI == True:
+            cih = CiHttpHandler(api)
+            cih_fmt = CiJsonFormatter(log_type=CI_LOGTYPE)
+            cih.setLevel(CI_LOGLEVEL)
+            cih.setFormatter(cih_fmt)
+            log.addHandler(cih)
+            log.setLevel(min(cih.level,ch.level))
+        else:
+            log.setLevel(ch.level)
         main()
