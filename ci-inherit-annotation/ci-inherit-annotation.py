@@ -37,7 +37,7 @@ with open(args.token, 'r') as fp:
     lines = fp.readlines()
 token = None
 for line in lines:
-     if not line.startswith('#') and len(line) > 472:
+     if not line.startswith('#') and len(line) > 420:
          token = line.rstrip('\n') if line.endswith('\n') else line
 
 class ciSession(requests.Session):
@@ -77,9 +77,9 @@ class CiHttpHandler(logging.Handler):
 class CiJsonFormatter(logging.Formatter):
     def __init__(self, log_type=parser.prog, *args,**kwargs):
         super().__init__(*args, **kwargs)
-        fields = {"timestamp":dt.now().timestamp(), "type": f"logs.{log_type}", "source": my_ip(), "hostname": platform.node(),
+        self.fields = {"timestamp":dt.now().timestamp(), "type": f"logs.{log_type}", "source": my_ip(), "hostname": platform.node(),
             "user": getpass.getuser(), "program": myprog, "level":"%(levelname)s", "message": "%(message)s"}
-        self.formatter = logging.Formatter(json.dumps(fields))
+        self.formatter = logging.Formatter(json.dumps(self.fields))
     def format(self, record, *args,**kwargs):
         self.fields.update({"timestamp":dt.now().timestamp()}) # update the timestamp for each message
         formatted = json.loads(self.formatter.format(record))
