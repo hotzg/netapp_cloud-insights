@@ -8,7 +8,7 @@ from datetime import datetime as dt
 LOG_TO_CI = False
 CI_LOGLEVEL = 'INFO'
 CI_LOGTYPE = 'custom_script'
-MAX_PAYLOAD_TARGETS = 333
+MAX_PAYLOAD_TARGETS = 2000
 
 # argument parsing
 parser = argparse.ArgumentParser(
