@@ -8,7 +8,7 @@ from datetime import datetime as dt
 LOG_TO_CI = False
 CI_LOGLEVEL = 'INFO'
 CI_LOGTYPE = 'custom_script'
-MAX_PAYLOAD_TARGETS = 2000
+MAX_PAYLOAD_TARGETS = 333
 
 # argument parsing
 parser = argparse.ArgumentParser(
@@ -81,6 +81,7 @@ class CiJsonFormatter(logging.Formatter):
             "user": getpass.getuser(), "program": myprog, "level":"%(levelname)s", "message": "%(message)s"}
         self.formatter = logging.Formatter(json.dumps(fields))
     def format(self, record, *args,**kwargs):
+        self.fields.update({"timestamp":dt.now().timestamp()}) # update the timestamp for each message
         formatted = json.loads(self.formatter.format(record))
         if "extra" in record.__dict__ and isinstance(record.__dict__['extra'], dict):
             for k,v in record.__dict__['extra'].items():
@@ -164,28 +165,24 @@ def main():
         for tgt in annot['targets']:
             targets = api.get('{}/{}'.format(tgt,obj_to_asset(obj_to)))
             if targets:
-                if not payloads:
-                    payloads.append({"objectType": obj_to,"values": []})
-                if annot['rawValue'] not in [rv['rawValue'] for rv in payloads[-1]['values']]:
-                    payloads[-1]['values'].append({'rawValue': annot['rawValue'], 'targets': []})
-                # iterate through targets and add to payloads in chunks of MAX_PAYLOAD_TARGETS
+                if not payloads: payloads.append({"objectType": obj_to,"values": []})
+                # iterate through targets and add to payloads in batches of MAX_PAYLOAD_TARGETS
                 for target in targets:
-                    for val in payloads[-1]['values']:
-                        if val['rawValue'] == annot['rawValue']:
-                            if sum([len(v['targets']) for v in payloads[-1]['values']]) < MAX_PAYLOAD_TARGETS:
-                                val['targets'].append(target['id'])
-                            else:
-                                # MAX_PAYLOAD_TARGETS reached, add new chunk to payloads
-                                payloads.append({"objectType": obj_to,"values": [{'rawValue': annot['rawValue'], 'targets': [target['id']]}]})
-                                break
+                    if sum([len(v['targets']) for v in payloads[-1]['values']]) < MAX_PAYLOAD_TARGETS:
+                        if annot['rawValue'] not in [rv['rawValue'] for rv in payloads[-1]['values']] :
+                            payloads[-1]['values'].append({'rawValue': annot['rawValue'], 'targets': []})
+                        for val in payloads[-1]['values']:
+                            if val['rawValue'] == annot['rawValue']: val['targets'].append(target['id'])
+                    else: # MAX_PAYLOAD_TARGETS reached, add new batch to payloads
+                        payloads.append({"objectType": obj_to,"values": [{'rawValue': annot['rawValue'], 'targets': [target['id']]}]})
             else:
                 asset = api.get(tgt) # retrieve asset name for log message
                 log.warning(f'No {obj_to_asset(obj_to)} found for {obj_from} {asset["name"]}')
     if payloads:
-        log.info('Submitting payload of annotation assignments in chunks of up to {} targets'.format(MAX_PAYLOAD_TARGETS))
+        log.info('Submitting payload of annotation assignments in batches of up to {} targets'.format(MAX_PAYLOAD_TARGETS))
         for n,payload in enumerate(payloads,1):
             tgt_count = sum([len(val['targets']) for val in payload['values']])
-            log.debug(f'Submitting annotations payload {n} with {tgt_count} targets')
+            log.debug(f'Submitting annotations payload {n} with {tgt_count} targets',extra={'extra':{'payload':[payload]}})
             resp = api.put(my_annot['self']+'/values', json=[payload])
             log.info(f'Payload {n}: Annotations applied: {resp}')
     
