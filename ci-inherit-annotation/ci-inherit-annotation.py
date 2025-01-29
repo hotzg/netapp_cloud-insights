@@ -115,7 +115,6 @@ class CiHttpHandler(logging.Handler):
     def emit(self, record):
         payload = [self.format(record)]
         return self.session.post('logs/ingest', json=payload)
-
 class CiJsonFormatter(logging.Formatter):
     def __init__(self, log_type=parser.prog, *args,**kwargs):
         super().__init__(*args, **kwargs)
@@ -123,7 +122,7 @@ class CiJsonFormatter(logging.Formatter):
             "user": getpass.getuser(), "program": myprog, "level":"%(levelname)s", "message": "%(message)s"}
         self.formatter = logging.Formatter(json.dumps(self.fields))
     def format(self, record, *args,**kwargs):
-        self.fields.update({"timestamp":dt.now().timestamp()}) # update the timestamp for each message
+        self.fields.update({"timestamp":dt.now().timestamp()})
         formatted = json.loads(self.formatter.format(record))
         if "extra" in record.__dict__ and isinstance(record.__dict__['extra'], dict):
             for k,v in record.__dict__['extra'].items():
@@ -179,7 +178,7 @@ def inherit_annotation(my_annot, obj_from, obj_to):
                 asset = api.get(tgt) # retrieve asset name for log message
                 log.warning(f'No {obj_to_asset(obj_to)} found for {obj_from} {asset["name"]}')
     if payloads:
-        log.info('Submitting annotation "{}" assignment for "{} => {}" in batches of up to {} targets'.format(my_annot["name"],obj_from,obj_to,MAX_PAYLOAD_TARGETS))
+        log.info('Submitting annotation \'{}\' assignment for \'{} => {}\' in batches of up to {} targets'.format(my_annot["name"],obj_from,obj_to,MAX_PAYLOAD_TARGETS))
         for n,payload in enumerate(payloads,1):
             tgt_count = sum([len(val['targets']) for val in payload['values']])
             log.debug(f'Submitting annotations payload {n} with {tgt_count} targets',extra={'extra':{'payload':[payload]}})
