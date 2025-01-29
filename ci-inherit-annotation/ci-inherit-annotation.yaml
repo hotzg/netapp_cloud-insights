@@ -1,0 +1,56 @@
+# ci-inherit-annotation.yaml
+# Config file for executing ci-inherit-annotation.py non-interactively potentially triggered by a scheduler (i.e. cron)
+#
+# params: 
+#   Requires ci_url and ci_token to have a value. proxy_* can be null or if host and optionally port have values,
+#   the script will use to connect to a proxy. If proxy_port is null, will connect to proxy port 80/TCP
+#   If both proxy_user and proxy_password have values, these will be used for authentication.
+#   proxy_password should have a base64 encoded representation of the actual password, which can be generated on the CLI, using:
+#   python: python -c "import base64; print(base64.b64encode(b'your_secret_password').decode())"
+#   powershell: [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes("your_secret_password"))
+#
+# inherit:
+#   Each block collection will be processed in sequence and specifies the annotation to be inherited. 
+#   The specified annotation will be compared case-sensitive with annotation names retrieved from CI/DII.
+#   The values for "from" and "to" need to be valid as per hardcoded object-tree hierarchy:
+#
+#     'Storage': ['StorageNode','StoragePool','StorageVirtualMachine','InternalVolume','Volume','Qtree','Share','Port','Disk'],
+#     'StorageNode' :['StoragePool','InternalVolume','Volume','Port'],
+#     'StoragePool':['StorageVirtualMachine','InternalVolume','Volume','Disk'],
+#     'StorageVirtualMachine': ['StoragePool','InternalVolume','Volume','Qtree','Share'],
+#     'InternalVolume':['Volume','Qtree','Share','Quota'],
+#     'Volume':['DataStore','Port'],
+#     'Qtree':['Share','Quota'],
+#     'Host':['VirtualMachine','Port','Volume'],
+#     'DataStore':['Host','Vmdk'],
+#     'Switch':['Port'],
+#     'VirtualMachine':['Vmdk']
+#
+#  Invalid definitions will be ignored.
+
+params:
+  ci_url: https://ps1325.c01.cloudinsights.netapp.com
+  ci_token: eyJraWQiOiI5OTk5IiwidHlwIjoiSldUIiwiYWxnIjoiSFMzODQifQ.eyJjc...
+  proxy_host: proxy.yourdomain.com
+  proxy_port: 3128
+  proxy_user: foo.bar
+  proxy_password: eW91cl9zZWNyZXRfcGFzc3dvcmQ=
+inherit:
+- annotation: Business Entity
+  from: StorageVirtualMachine
+  to: InternalVolume
+- annotation: Business Entity
+  from: StorageVirtualMachine
+  to: Volume
+- annotation: country
+  from: Storage
+  to: StorageNode
+- annotation: country
+  from: Host
+  to: VirtualMachine
+- annotation: Color
+  from: InternalVolume
+  to: Qtree
+- annotation: Color
+  from: InternalVolume
+  to: Share
