@@ -41,7 +41,7 @@ if config_file_args.config_file:
         # update proxy settings
         if 'proxy_host' in config['params'] and config['params']['proxy_host'] != None:
             if 'proxy_port' in config['params'] and config['params']['proxy_port'] != None:
-                proxy_host = f'{config['params']['proxy_host']}:{config['params']['proxy_port']}'
+                proxy_host = f"{config['params']['proxy_host']}:{config['params']['proxy_port']}"
             else:
                 proxy_host = config['params']['proxy_host']
             if 'proxy_user' in config['params'] and config['params']['proxy_user'] != None\
